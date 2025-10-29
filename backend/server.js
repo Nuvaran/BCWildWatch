@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const geminiService = require('./services/geminiService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +57,55 @@ app.post('/api/test', (req, res) => {
     echo: `You said: "${message}"`,
     timestamp: new Date().toISOString()
   });
+});
+
+// Gemini API test endpoint
+
+// Test Gemini connection
+app.get('/api/gemini/test', async (req, res) => {
+  console.log('🤖 Testing Gemini connection...');
+  const result = await geminiService.testGemini();
+  res.json(result);
+});
+
+// Chat with Gemini
+app.post('/api/gemini/chat', async (req, res) => {
+  const { message, context } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({
+      success: false,
+      error: 'Message is required'
+    });
+  }
+
+  console.log('💬 Gemini chat:', message);
+  const result = await geminiService.chat(message, context);
+  res.json(result);
+});
+
+// Get safety tip for animal
+app.get('/api/gemini/safety-tip/:animal', async (req, res) => {
+  const { animal } = req.params;
+  console.log('🛡️ Getting safety tip for:', animal);
+  const result = await geminiService.getSafetyTip(animal);
+  res.json(result);
+});
+
+// Extract incident information from natural language
+app.post('/api/gemini/extract-incident', async (req, res) => {
+  const { message } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({
+      success: false,
+      error: 'Message is required'
+    });
+  }
+
+  console.log('🔍 Extracting incident info from:', message);
+  const result = await geminiService.extractIncidentInfo(message);
+  res.json(result);
 });
 
 // 404 handler
