@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Configure base URL (NOTE: Change URL when deployed to vercel)
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5173';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
