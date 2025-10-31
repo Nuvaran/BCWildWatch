@@ -1,24 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Home, Phone, AlertCircle, FileText, MapPin, ChevronUp, ChevronDown } from 'lucide-react';
+import { Send, Home, ChevronUp, ChevronDown } from 'lucide-react';
 import MessageList from './MessageList';
 import EmergencyContacts from './EmergencyContacts';
 import Resources from './Resources';
 import ReportStatus from './ReportStatus';
+import apiService from '../services/apiService';
 
 const ChatWindow = ({ userId, userName }) => {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      type: 'bot',
-      text: 'Welcome to BCWildWatch! I can help you report any animal sighting. To get started, please describe the animal you saw.',
-      timestamp: new Date()
-    }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [reportSubmitted, setReportSubmitted] = useState(false);
   const [reportData, setReportData] = useState(null);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [currentButtons, setCurrentButtons] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -29,115 +25,164 @@ const ChatWindow = ({ userId, userName }) => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return;
+  // Initialize conversation on mount
+  useEffect(() => {
+    initializeChat();
+  }, []);
 
+  const initializeChat = async () => {
+    setIsLoading(true);
+    
+    // Send initial message to start conversation
+    const result = await apiService.sendMessage(userId, 'start', 'system');
+    
+    console.log('Init result:', result);
+    
+    if (result.success && result.data && result.data.response) {
+      const botMessage = {
+        id: Date.now(),
+        type: 'bot',
+        text: result.data.response.text,
+        timestamp: new Date()
+      };
+      
+      setMessages([botMessage]);
+      setCurrentButtons(result.data.response.buttons || []);
+      
+      console.log('✅ Chat initialized successfully');
+      console.log('Buttons:', result.data.response.buttons);
+    } else {
+      console.error('❌ Failed to initialize chat:', result);
+      
+      // Fallback greeting if API fails
+      const fallbackMessage = {
+        id: Date.now(),
+        type: 'bot',
+        text: "Hello! 👋 Welcome to BC WildWatch. I can help you report a wildlife or animal incident quickly. Shall we get started?",
+        timestamp: new Date()
+      };
+      setMessages([fallbackMessage]);
+      setCurrentButtons([
+        { label: "Yes ✅", value: "yes" },
+        { label: "No ❌", value: "no" }
+      ]);
+    }
+    
+    setIsLoading(false);
+  };
+
+  const handleSendMessage = async (messageText = null, isButtonClick = false) => {
+    const textToSend = messageText || inputMessage;
+    
+    if (!textToSend.trim()) return;
+
+    console.log(`📤 Sending message: "${textToSend}" (isButton: ${isButtonClick})`);
+
+    // Add user message
     const userMessage = {
       id: Date.now(),
       type: 'user',
-      text: inputMessage,
+      text: textToSend,
       timestamp: new Date()
     };
 
     setMessages(prev => [...prev, userMessage]);
-    const currentInput = inputMessage;
     setInputMessage('');
+    setCurrentButtons([]);
     setIsTyping(true);
 
-    // Simple conversation flow
-    if (messages.length === 1) {
-      // First user message - asking about animal
-      setTimeout(() => {
-        const botMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          text: 'Thank you for identifying the animal. Your safety is our priority. Here are some immediate safety tips for dealing with a snake:',
-          safetyTips: {
-            animal: 'Rinkhals',
-            tips: [
-              'Do NOT approach or provoke the snake',
-              'Keep a safe distance of at least 6 meters',
-              'Rinkhals are known to spit venom, protect your eyes',
-              'Warn others in the area to stay clear'
-            ]
-          },
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, botMessage]);
-        setIsTyping(false);
+    // Send to backend
+    const result = await apiService.sendMessage(
+      userId, 
+      textToSend,
+      isButtonClick ? 'button' : 'text'
+    );
 
-        // Ask for location
-        setTimeout(() => {
+    console.log('📥 Backend response:', result);
+
+    setIsTyping(false);
+
+    if (result.success && result.data && result.data.response) {
+      const response = result.data.response;
+      
+      console.log('✅ Got valid response:', {
+        text: response.text?.substring(0, 50),
+        hasButtons: response.buttons?.length > 0,
+        shouldSubmit: response.shouldSubmitReport
+      });
+      
+      // Check if report should be submitted
+      if (response.shouldSubmitReport && response.reportData) {
+        console.log('📋 Submitting report to Power Automate...');
+        // Submit to Power Automate
+        const submitResult = await apiService.submitIncident(response.reportData);
+        console.log('Submit result:', submitResult);
+        
+        setReportSubmitted(true);
+        setReportData(response.reportData);
+      }
+
+      // Add bot response
+      const botMessage = {
+        id: Date.now() + 1,
+        type: 'bot',
+        text: response.text,
+        timestamp: new Date()
+      };
+
+      setMessages(prev => [...prev, botMessage]);
+      setCurrentButtons(response.buttons || []);
+
+      // If report was just submitted, get safety tips after a delay
+      if (response.shouldSubmitReport) {
+        setTimeout(async () => {
           setIsTyping(true);
-          setTimeout(() => {
-            const locationMessage = {
+          const safetyResult = await apiService.getSafetyTips(userId);
+          setIsTyping(false);
+
+          if (safetyResult.success && safetyResult.data.safetyTips) {
+            const safetyMessage = {
               id: Date.now() + 2,
               type: 'bot',
-              text: 'Now, can you please tell me where you saw the snake?',
+              text: `Here are some safety tips for dealing with a ${safetyResult.data.safetyTips.animal}:`,
+              safetyTips: safetyResult.data.safetyTips,
               timestamp: new Date()
             };
-            setMessages(prev => [...prev, locationMessage]);
-            setIsTyping(false);
-          }, 1000);
-        }, 2000);
-      }, 1500);
-    } else if (messages.length === 4) {
-      // Second user message - location provided
-      setTimeout(() => {
-        const confirmMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          text: `I understand. Near the main library entrance. To confirm, is the animal still there?`,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, confirmMessage]);
-        setIsTyping(false);
-      }, 1000);
-    } else if (messages.length === 6) {
-      // Third user message - confirmation
-      setTimeout(() => {
-        const submittingMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          text: 'Thank you for confirming. I am now submitting your report to Campus Security...',
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, submittingMessage]);
-        setIsTyping(false);
 
-        // Submit report after 2 seconds
-        setTimeout(() => {
-          setReportSubmitted(true);
-          setReportData({
-            reportId: 'BCW-98172',
-            animalType: 'Rinkhals Snake',
-            location: 'Library Entrance',
-            status: 'Alert Sent',
-            description: currentInput
-          });
+            setMessages(prev => [...prev, safetyMessage]);
 
-          const successMessage = {
-            id: Date.now() + 2,
-            type: 'bot',
-            text: 'Your report has been successfully submitted! Campus Security has been notified and will respond shortly. You can view your report details in the sidebar.',
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, successMessage]);
+            // Add the completion message
+            if (safetyResult.data.nextStep) {
+              setTimeout(() => {
+                const completionMessage = {
+                  id: Date.now() + 3,
+                  type: 'bot',
+                  text: safetyResult.data.nextStep.text,
+                  timestamp: new Date()
+                };
+                setMessages(prev => [...prev, completionMessage]);
+                setCurrentButtons(safetyResult.data.nextStep.buttons || []);
+              }, 1000);
+            }
+          }
         }, 2000);
-      }, 1500);
+      }
     } else {
-      // Any other messages
-      setTimeout(() => {
-        const botMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          text: 'Is there anything else you would like to report or any questions I can help you with?',
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, botMessage]);
-        setIsTyping(false);
-      }, 1000);
+      // Error handling
+      console.error('❌ Failed to get response:', result);
+      
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: 'bot',
+        text: "I'm having trouble connecting right now. Please try again.",
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
     }
+  };
+
+  const handleButtonClick = (buttonValue) => {
+    handleSendMessage(buttonValue, true);
   };
 
   const handleKeyPress = (e) => {
@@ -146,6 +191,17 @@ const ChatWindow = ({ userId, userName }) => {
       handleSendMessage();
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600 text-lg">Loading BCWildWatch...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -173,7 +229,7 @@ const ChatWindow = ({ userId, userName }) => {
           </button>
         </div>
 
-        {/* Messages Container - Add padding bottom on mobile when report submitted */}
+        {/* Messages Container */}
         <div 
           className="flex-1 overflow-y-auto px-6 py-6 space-y-4 chat-scroll"
           style={{ 
@@ -182,31 +238,25 @@ const ChatWindow = ({ userId, userName }) => {
         >
           <MessageList messages={messages} isTyping={isTyping} />
           
-          {reportSubmitted && (
-            <div className="message-enter max-w-2xl">
-              <div className="bg-green-50 border border-green-200 rounded-2xl p-5">
-                <div className="flex items-start space-x-4">
-                  <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="font-bold text-green-800 text-lg mb-2">Report Submitted Successfully</div>
-                    <div className="text-sm text-green-700 mb-3">Report ID: BCW-98172</div>
-                    <div className="text-sm text-gray-700 leading-relaxed">
-                      Thank you! Your report has been sent to Campus Security. Please maintain a safe distance from the area. Your help is vital in keeping our campus safe for everyone.
-                    </div>
-                  </div>
-                </div>
-              </div>
+          {/* Quick Action Buttons */}
+          {currentButtons.length > 0 && !isTyping && (
+            <div className="flex flex-wrap gap-2 max-w-2xl mx-auto">
+              {currentButtons.map((button, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleButtonClick(button.value)}
+                  className="px-4 py-2 bg-white hover:bg-primary-50 border-2 border-primary-200 hover:border-primary-500 text-primary-700 hover:text-primary-800 rounded-full font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md"
+                >
+                  {button.label}
+                </button>
+              ))}
             </div>
           )}
 
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area - Add margin bottom on mobile when report submitted */}
+        {/* Input Area */}
         <div 
           className="bg-white border-t border-gray-200 px-6 py-4 flex-shrink-0"
           style={{
@@ -224,12 +274,13 @@ const ChatWindow = ({ userId, userName }) => {
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Type your message..."
-                className="flex-1 bg-transparent outline-none text-sm text-gray-800 placeholder-gray-400"
+                disabled={isTyping}
+                className="flex-1 bg-transparent outline-none text-sm text-gray-800 placeholder-gray-400 disabled:opacity-50"
               />
             </div>
             <button
-              onClick={handleSendMessage}
-              disabled={!inputMessage.trim()}
+              onClick={() => handleSendMessage()}
+              disabled={!inputMessage.trim() || isTyping}
               className="w-11 h-11 bg-primary-500 rounded-full flex items-center justify-center hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               <Send className="w-5 h-5 text-white" />
@@ -239,57 +290,40 @@ const ChatWindow = ({ userId, userName }) => {
       </div>
 
       {/* Right Sidebar - Desktop Only - Only show when report submitted */}
-      {reportSubmitted && (
+      {reportSubmitted && reportData && (
         <div className="hidden lg:block w-80 xl:w-96 bg-white border-l border-gray-200 overflow-y-auto flex-shrink-0">
           <div className="p-6 space-y-6">
-            {/* Report Status */}
             <ReportStatus 
-              reportId="BCW-98172"
-              animalType="Rinkhals Snake"
-              location="Library Entrance"
+              reportId={reportData.reportId}
+              animalType={reportData.animalType}
+              location={reportData.location?.landmark || `${reportData.location?.longitude}, ${reportData.location?.latitude}`}
               status="Alert Sent"
             />
-
-            {/* Emergency Contacts */}
             <EmergencyContacts />
-
-            {/* Resources */}
             <Resources />
-
-            {/* Map Section (placeholder) */}
-            <div>
-              <h3 className="font-bold text-gray-800 mb-3">Reported Location</h3>
-              <div className="bg-gray-100 rounded-xl h-48 flex items-center justify-center">
-                <div className="text-center text-gray-500">
-                  <MapPin className="w-8 h-8 mx-auto mb-2" />
-                  <p className="text-sm">Map will appear here</p>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       )}
 
       {/* Mobile Bottom Sheet - Only show when report submitted */}
-      {reportSubmitted && (
+      {reportSubmitted && reportData && (
         <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-200 shadow-2xl transition-all duration-300 z-50"
           style={{ 
             maxHeight: mobileSheetOpen ? '70vh' : '60px',
             paddingBottom: 'env(safe-area-inset-bottom)'
           }}
         >
-          {/* Sheet Header - Toggle Button */}
           <button
             onClick={() => setMobileSheetOpen(!mobileSheetOpen)}
             className="w-full px-4 py-3 flex items-center justify-between bg-white hover:bg-gray-50 transition-colors"
           >
             <div className="flex items-center space-x-3">
               <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
-                <FileText className="w-4 h-4 text-primary-600" />
+                <Home className="w-4 h-4 text-primary-600" />
               </div>
               <div className="text-left">
                 <div className="font-semibold text-gray-800 text-sm">Report Details</div>
-                <div className="text-xs text-gray-500">BCW-98172 • Tap to {mobileSheetOpen ? 'close' : 'expand'}</div>
+                <div className="text-xs text-gray-500">{reportData.reportId} • Tap to {mobileSheetOpen ? 'close' : 'expand'}</div>
               </div>
             </div>
             <div className="flex items-center space-x-2">
@@ -304,28 +338,16 @@ const ChatWindow = ({ userId, userName }) => {
             </div>
           </button>
 
-          {/* Sheet Content - Scrollable */}
           {mobileSheetOpen && (
             <div className="overflow-y-auto px-4 pb-4 space-y-4" style={{ maxHeight: 'calc(70vh - 60px)' }}>
               <ReportStatus 
-                reportId="BCW-98172"
-                animalType="Rinkhals Snake"
-                location="Library Entrance"
+                reportId={reportData.reportId}
+                animalType={reportData.animalType}
+                location={reportData.location?.landmark || `${reportData.location?.longitude}, ${reportData.location?.latitude}`}
                 status="Alert Sent"
               />
               <EmergencyContacts />
               <Resources />
-              
-              {/* Map Section */}
-              <div>
-                <h3 className="font-bold text-gray-800 mb-3 text-lg">Reported Location</h3>
-                <div className="bg-gray-100 rounded-xl h-40 flex items-center justify-center">
-                  <div className="text-center text-gray-500">
-                    <MapPin className="w-8 h-8 mx-auto mb-2" />
-                    <p className="text-sm">Map will appear here</p>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </div>

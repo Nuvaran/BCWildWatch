@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Configure base URL (NOTE: Change URL when deployed to vercel)
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5173';
+// Configure base URL
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -13,7 +13,55 @@ const api = axios.create({
 
 // API Service Methods
 const apiService = {
-  // Test connection
+  // ==== CHATBOT INTERACTIONS ==== //
+  async sendMessage(userId, message, messageType = 'text') {
+    try {
+      const response = await api.post('/api/chat/message', {
+        userId,
+        message,
+        messageType
+      });
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Send message failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Retrieve safety tips for a user
+  async getSafetyTips(userId) {
+    try {
+      const response = await api.post('/api/chat/safety-tips', { userId });
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Get safety tips failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Submit incident report
+  async submitIncident(reportData) {
+    try {
+      const response = await api.post('/api/chat/submit-incident', { reportData });
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Submit incident failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Reset conversation for a user
+  async resetConversation(userId) {
+    try {
+      const response = await api.post('/api/chat/reset', { userId });
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Reset conversation failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // ==== SYSTEM HEALTH CHECKS ==== //
   async testConnection() {
     try {
       const response = await api.get('/');
@@ -24,63 +72,23 @@ const apiService = {
     }
   },
 
-  // Test Gemini connection
+  async checkHealth() {
+    try {
+      const response = await api.get('/health');
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Health check failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Test Gemini integration
   async testGemini() {
     try {
       const response = await api.get('/api/gemini/test');
       return { success: true, data: response.data };
     } catch (error) {
       console.error('Gemini test failed:', error);
-      return { success: false, error: error.message };
-    }
-  },
-
-  // Send chat message to Gemini
-  async sendMessage(message, context = '') {
-    try {
-      const response = await api.post('/api/gemini/chat', {
-        message,
-        context
-      });
-      return { success: true, data: response.data };
-    } catch (error) {
-      console.error('Send message failed:', error);
-      return { success: false, error: error.message };
-    }
-  },
-
-  // Get safety tip for specific animal
-  async getSafetyTip(animalType) {
-    try {
-      const response = await api.get(`/api/gemini/safety-tip/${animalType}`);
-      return { success: true, data: response.data };
-    } catch (error) {
-      console.error('Get safety tip failed:', error);
-      return { success: false, error: error.message };
-    }
-  },
-
-  // Extract incident information from user message
-  async extractIncident(message) {
-    try {
-      const response = await api.post('/api/gemini/extract-incident', {
-        message
-      });
-      return { success: true, data: response.data };
-    } catch (error) {
-      console.error('Extract incident failed:', error);
-      return { success: false, error: error.message };
-    }
-  },
-
-  // Submit incident report to Power Automate
-  async submitIncidentReport(incidentData) {
-    try {
-      // This will call your Power Automate flow endpoint (to be created)
-      const response = await api.post('/api/incident/submit', incidentData);
-      return { success: true, data: response.data };
-    } catch (error) {
-      console.error('Submit incident failed:', error);
       return { success: false, error: error.message };
     }
   }
