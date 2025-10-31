@@ -39,6 +39,8 @@ app.get('/health', (req, res) => {
 // Chat routes
 app.use('/api/chat', chatRoutes);
 
+// ===== GEMINI AI ENDPOINTS (for testing) =====
+
 // Test Gemini connection
 app.get('/api/gemini/test', async (req, res) => {
   console.log('🤖 Testing Gemini connection...');
@@ -62,7 +64,7 @@ app.post('/api/gemini/chat', async (req, res) => {
   res.json(result);
 });
 
-// Get safety tip for animal (from Gemini - for testing)
+// Get safety tip for animal (direct - for testing)
 app.get('/api/gemini/safety-tip/:animal', async (req, res) => {
   const { animal } = req.params;
   console.log('🛡️ Getting safety tip for:', animal);
@@ -78,7 +80,7 @@ app.use((req, res, next) => {
   });
 });
 
-// Error handler
+// Error handler (must be last)
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({

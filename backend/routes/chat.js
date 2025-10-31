@@ -261,18 +261,16 @@ router.post('/safety-tips', async (req, res) => {
     const safetyTipResult = await geminiService.getSafetyTip(animalType);
 
     if (safetyTipResult.success) {
-      // Move to complete step
-      conversationManager.updateConversation(userId, { step: STEPS.COMPLETE });
+      // Attach tips to conversation so UI can access
+      conversationManager.updateConversation(userId, { data: { safetyTips: safetyTipResult.tips }, step: STEPS.COMPLETE });
 
       res.json({
         success: true,
         safetyTips: {
           animal: animalType,
-          tips: safetyTipResult.tip
+          tips: safetyTipResult.tips
         },
-        nextStep: conversationManager.generateResponse(
-          conversationManager.getConversation(userId)
-        )
+        nextStep: conversationManager.generateResponse(conversationManager.getConversation(userId))
       });
     } else {
       res.json({
