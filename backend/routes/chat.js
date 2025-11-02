@@ -35,13 +35,15 @@ router.post('/message', async (req, res) => {
           );
           console.log('✅ Moving to ANIMAL_TYPE step');
         } else if (normalizedMessage === 'no') {
-          botResponse = {
-            text: "No problem! Stay safe and have a great day. 👋",
-            buttons: [],
-            expectsInput: 'none'
-          };
+          // Reset conversation and show greeting again
           conversationManager.resetConversation(userId);
-          console.log('❌ User declined, conversation ended');
+          botResponse = {
+            text: "No problem! Feel free to start whenever you're ready.",
+            buttons: [],
+            expectsInput: 'none',
+            shouldReset: true // Signal frontend to reset
+          };
+          console.log('❌ User declined, resetting conversation');
         } else {
           botResponse = conversationManager.generateResponse(conversation);
           console.log('⚠️ Invalid response, showing greeting again');
@@ -52,12 +54,31 @@ router.post('/message', async (req, res) => {
         const animal = conversationManager.validateAnimal(message);
         if (animal) {
           conversationManager.updateConversation(userId, {
-            data: { animalType: animal },
-            step: STEPS.CAMPUS
+            data: { animalType: animal }
           });
-          botResponse = conversationManager.generateResponse(
-            conversationManager.getConversation(userId)
-          );
+          
+          // Check if we're editing
+          const conv = conversationManager.getConversation(userId);
+          if (conv.editingField) {
+            // Return to confirmation after editing
+            conversationManager.updateConversation(userId, { 
+              step: STEPS.CONFIRM,
+              editingField: null
+            });
+            const confirmationResponse = conversationManager.generateResponse(
+              conversationManager.getConversation(userId)
+            );
+            botResponse = {
+              text: `✅ Animal type updated to ${animal}.\n\n${confirmationResponse.text}`,
+              buttons: confirmationResponse.buttons,
+              expectsInput: confirmationResponse.expectsInput
+            };
+          } else {
+            conversationManager.updateConversation(userId, { step: STEPS.CAMPUS });
+            botResponse = conversationManager.generateResponse(
+              conversationManager.getConversation(userId)
+            );
+          }
         } else {
           botResponse = {
             text: "I didn't recognize that animal type. Please choose from: Snake, Bee, Wasp, Spider, Cat, or Dog.",
@@ -71,12 +92,30 @@ router.post('/message', async (req, res) => {
         const campus = conversationManager.validateCampus(message);
         if (campus) {
           conversationManager.updateConversation(userId, {
-            data: { campus },
-            step: STEPS.LOCATION
+            data: { campus }
           });
-          botResponse = conversationManager.generateResponse(
-            conversationManager.getConversation(userId)
-          );
+          
+          // Check if we're editing
+          const convCamp = conversationManager.getConversation(userId);
+          if (convCamp.editingField) {
+            conversationManager.updateConversation(userId, { 
+              step: STEPS.CONFIRM,
+              editingField: null
+            });
+            const confirmationResponse = conversationManager.generateResponse(
+              conversationManager.getConversation(userId)
+            );
+            botResponse = {
+              text: `✅ Campus updated to ${campus}.\n\n${confirmationResponse.text}`,
+              buttons: confirmationResponse.buttons,
+              expectsInput: confirmationResponse.expectsInput
+            };
+          } else {
+            conversationManager.updateConversation(userId, { step: STEPS.LOCATION });
+            botResponse = conversationManager.generateResponse(
+              conversationManager.getConversation(userId)
+            );
+          }
         } else {
           botResponse = {
             text: "Please select a valid campus: Stellenbosch, Kempton Park, or Pretoria.",
@@ -87,36 +126,45 @@ router.post('/message', async (req, res) => {
         break;
 
       case STEPS.LOCATION:
-        // Try to parse coordinates
-        const coordMatch = message.match(/(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)/);
-        if (coordMatch) {
-          const validation = conversationManager.validateLocation(coordMatch[1], coordMatch[2]);
-          if (validation.valid) {
-            conversationManager.updateConversation(userId, {
-              data: { 
-                location: { 
-                  longitude: validation.longitude, 
-                  latitude: validation.latitude 
-                } 
-              },
-              step: STEPS.DETAILS
-            });
-            botResponse = conversationManager.generateResponse(
-              conversationManager.getConversation(userId)
-            );
-          } else {
-            botResponse = {
-              text: "Those coordinates don't look valid. Please try again or describe the nearest landmark.",
-              buttons: [],
-              expectsInput: 'text'
-            };
-          }
-        } else {
-          // Treat as landmark
+        // Try to validate as coordinates
+        const validation = conversationManager.validateLocation(message);
+        
+        if (validation.valid) {
           conversationManager.updateConversation(userId, {
-            data: { location: { landmark: message } },
-            step: STEPS.DETAILS
+            data: { 
+              location: { 
+                longitude: validation.longitude, 
+                latitude: validation.latitude,
+                originalFormat: validation.originalFormat
+              } 
+            }
           });
+          console.log('✅ Valid coordinates provided');
+        } else {
+          // Treat as landmark description
+          conversationManager.updateConversation(userId, {
+            data: { location: { landmark: message } }
+          });
+          console.log('✅ Landmark description provided');
+        }
+        
+        // Check if we're editing
+        const convLoc = conversationManager.getConversation(userId);
+        if (convLoc.editingField) {
+          conversationManager.updateConversation(userId, { 
+            step: STEPS.CONFIRM,
+            editingField: null
+          });
+          const confirmationResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
+          botResponse = {
+            text: `✅ Location updated.\n\n${confirmationResponse.text}`,
+            buttons: confirmationResponse.buttons,
+            expectsInput: confirmationResponse.expectsInput
+          };
+        } else {
+          conversationManager.updateConversation(userId, { step: STEPS.DETAILS });
           botResponse = conversationManager.generateResponse(
             conversationManager.getConversation(userId)
           );
@@ -125,29 +173,69 @@ router.post('/message', async (req, res) => {
 
       case STEPS.DETAILS:
         conversationManager.updateConversation(userId, {
-          data: { details: message },
-          step: STEPS.PHOTO
+          data: { details: message }
         });
-        botResponse = conversationManager.generateResponse(
-          conversationManager.getConversation(userId)
-        );
+        
+        // Check if we're editing
+        const convDet = conversationManager.getConversation(userId);
+        if (convDet.editingField) {
+          conversationManager.updateConversation(userId, { 
+            step: STEPS.CONFIRM,
+            editingField: null
+          });
+          const confirmationResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
+          botResponse = {
+            text: `✅ Details updated.\n\n${confirmationResponse.text}`,
+            buttons: confirmationResponse.buttons,
+            expectsInput: confirmationResponse.expectsInput
+          };
+        } else {
+          conversationManager.updateConversation(userId, { step: STEPS.PHOTO });
+          botResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
+        }
         break;
 
       case STEPS.PHOTO:
         if (message.toLowerCase() === 'skip') {
           conversationManager.updateConversation(userId, { step: STEPS.CONFIRM });
+          botResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
         } else if (message.toLowerCase() === 'upload') {
-          // In real app, handle file upload here
+          // User clicked upload button - don't move to next step yet
           botResponse = {
-            text: "Photo upload feature coming soon! For now, let's proceed to confirmation.",
+            text: "Please select a photo from your device...",
             buttons: [],
-            expectsInput: 'none'
+            expectsInput: 'photo',
+            awaitingPhoto: true
           };
-          conversationManager.updateConversation(userId, { step: STEPS.CONFIRM });
+          console.log('⏳ Awaiting photo upload...');
+        } else if (message.startsWith('Photo uploaded:')) {
+          // Photo was uploaded, move to confirmation
+          const filename = message.replace('Photo uploaded: ', '').trim();
+          console.log(`📸 Storing photo filename: "${filename}"`);
+          
+          conversationManager.updateConversation(userId, { 
+            data: { photoFilename: filename },
+            step: STEPS.CONFIRM 
+          });
+          
+          // Verify it was stored
+          const updatedConv = conversationManager.getConversation(userId);
+          console.log('📋 Updated conversation data:', updatedConv.data);
+          
+          botResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
+          console.log('✅ Photo uploaded, moving to confirmation');
+        } else {
+          // Unknown response, show options again
+          botResponse = conversationManager.generateResponse(conversation);
         }
-        botResponse = conversationManager.generateResponse(
-          conversationManager.getConversation(userId)
-        );
         break;
 
       case STEPS.CONFIRM:
@@ -180,7 +268,7 @@ router.post('/message', async (req, res) => {
 
         } else if (message.toLowerCase() === 'edit') {
           botResponse = {
-            text: "Which field would you like to edit? (animal, campus, location, details)",
+            text: "Which field would you like to edit?",
             buttons: [
               { label: "Animal Type", value: "edit_animal" },
               { label: "Campus", value: "edit_campus" },
@@ -189,6 +277,34 @@ router.post('/message', async (req, res) => {
             ],
             expectsInput: 'button'
           };
+        } else if (message.startsWith('edit_')) {
+          // Handle edit field selection
+          const field = message.replace('edit_', '');
+          let targetStep;
+          
+          switch(field) {
+            case 'animal':
+              targetStep = STEPS.ANIMAL_TYPE;
+              break;
+            case 'campus':
+              targetStep = STEPS.CAMPUS;
+              break;
+            case 'location':
+              targetStep = STEPS.LOCATION;
+              break;
+            case 'details':
+              targetStep = STEPS.DETAILS;
+              break;
+          }
+          
+          conversationManager.updateConversation(userId, { 
+            step: targetStep,
+            editingField: field
+          });
+          
+          botResponse = conversationManager.generateResponse(
+            conversationManager.getConversation(userId)
+          );
         }
         break;
 
@@ -257,12 +373,16 @@ router.post('/safety-tips', async (req, res) => {
       });
     }
 
+    console.log(`🛡️ Getting safety tips for: ${animalType}`);
+
     // Get safety tips from Gemini
     const safetyTipResult = await geminiService.getSafetyTip(animalType);
 
-    if (safetyTipResult.success) {
-      // Attach tips to conversation so UI can access
-      conversationManager.updateConversation(userId, { data: { safetyTips: safetyTipResult.tips }, step: STEPS.COMPLETE });
+    console.log('Safety tip result:', safetyTipResult);
+
+    if (safetyTipResult.success && safetyTipResult.tips && safetyTipResult.tips.length > 0) {
+      // Move to complete step
+      conversationManager.updateConversation(userId, { step: STEPS.COMPLETE });
 
       res.json({
         success: true,
@@ -270,17 +390,34 @@ router.post('/safety-tips', async (req, res) => {
           animal: animalType,
           tips: safetyTipResult.tips
         },
-        nextStep: conversationManager.generateResponse(conversationManager.getConversation(userId))
+        nextStep: conversationManager.generateResponse(
+          conversationManager.getConversation(userId)
+        )
       });
     } else {
+      // Return fallback tips if Gemini fails
+      console.error('❌ Failed to get tips from Gemini, using fallback');
+      conversationManager.updateConversation(userId, { step: STEPS.COMPLETE });
+      
       res.json({
-        success: false,
-        error: 'Failed to get safety tips'
+        success: true,
+        safetyTips: {
+          animal: animalType,
+          tips: [
+            'Stay calm and maintain a safe distance from the animal',
+            'Do not attempt to approach, touch, or provoke the animal',
+            'Alert others in the immediate area about the animal\'s presence',
+            'Contact campus security immediately for assistance'
+          ]
+        },
+        nextStep: conversationManager.generateResponse(
+          conversationManager.getConversation(userId)
+        )
       });
     }
 
   } catch (error) {
-    console.error('Safety tips error:', error);
+    console.error('❌ Safety tips error:', error);
     res.status(500).json({
       success: false,
       error: error.message

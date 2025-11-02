@@ -3,141 +3,142 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 // Initialize Gemini API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Use Pro model
+// Use Gemini 1.5 Flash (fastest and free)
 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
-// Fallback safety tips for each animal
-const fallbackTips = {
-  snake: [
-    "Stay calm and back away slowly.",
-    "Do not attempt to touch or capture it.",
-    "Alert nearby security or staff.",
-    "Keep students and pets clear from area."
-  ],
-  bee: [
-    "Move away slowly from the swarm.",
-    "Do not swat at the bees.",
-    "Cover your face if necessary.",
-    "Alert nearby security or staff."
-  ],
-  dog: [
-    "Keep a safe distance from the dog.",
-    "Do not provoke or chase it.",
-    "Alert campus security immediately.",
-    "Ensure students stay calm and safe."
-  ],
-  cat: [
-    "Do not try to approach or pick up the cat.",
-    "Keep students calm and at a safe distance.",
-    "Alert campus security if aggressive or injured.",
-    "Do not feed or chase it."
-  ],
-  wasp: [
-    "Move away slowly from the wasps.",
-    "Avoid sudden movements or swatting.",
-    "Cover your face if needed.",
-    "Alert nearby staff or security."
-  ],
-  spider: [
-    "Stay calm and back away slowly.",
-    "Do not touch the spider.",
-    "Alert nearby security or staff.",
-    "Keep students clear from the area."
-  ]
-};
-
-// Retry wrapper for temporary API overloads
-async function safeGenerateContent(prompt, retries = 3) {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      return response.text();
-    } catch (error) {
-      if (attempt === retries - 1) throw error;
-      console.warn(`Gemini request failed (attempt ${attempt + 1}), retrying...`);
-      await new Promise(res => setTimeout(res, 1000 * (attempt + 1)));
-    }
+/**
+ * Test basic Gemini connection
+ */
+async function testGemini() {
+  try {
+    const prompt = "Say 'Hello from BC WildWatch!' in a friendly way.";
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return {
+      success: true,
+      text: response.text(),
+      model: 'gemini-2.5-pro'
+    };
+  } catch (error) {
+    console.error('Gemini API Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
-// Generate safety tips for encountering a specific animal
-async function getSafetyTip(animalType) {
-  const prompt = `You are a campus safety advisor for BC WildWatch. Provide safety tips for students who encounter a ${animalType} on campus.
-
-Return your response in this EXACT format as a numbered list:
-
-1. [First safety tip - one clear action]
-2. [Second safety tip - one clear action]  
-3. [Third safety tip - one clear action]
-4. [Fourth safety tip - one clear action]
-
-Keep each tip under 15 words. Focus on immediate, actionable steps. Be clear and direct.`;
-
+/**
+ * Send a message to Gemini and get a response
+ * @param {string} message - User message
+ * @param {string} systemContext - Context/instructions for the AI
+ */
+async function chat(message, systemContext = '') {
   try {
-    const text = await safeGenerateContent(prompt);
+    // Combine system context with user message
+    const fullPrompt = systemContext 
+      ? `${systemContext}\n\nUser: ${message}\n\nAssistant:`
+      : message;
 
-    // Parse numbered list into array
-    const tips = text
-      .split('\n')
-      .filter(line => line.trim().match(/^\d+\./))
-      .map(line => line.replace(/^\d+\.\s*/, '').trim());
-
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    
     return {
       success: true,
-      animalType,
-      tips: tips.length > 0 ? tips : fallbackTips[animalType] || ["No tips available."]
+      message: response.text(),
+      tokensUsed: {
+        prompt: result.response.promptTokenCount || 0,
+        completion: result.response.candidatesTokenCount || 0
+      }
+    };
+  } catch (error) {
+    console.error('Gemini Chat Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Get a safety tip for a specific animal type
+ * @param {string} animalType - Type of animal (snake, bee, dog, etc.)
+ */
+async function getSafetyTip(animalType) {
+  const prompt = `You are a campus safety advisor for BC WildWatch. A student has just reported a ${animalType} on campus.
+
+Provide exactly 4 safety tips as a simple numbered list. Each tip should be one clear, actionable sentence.
+
+Format your response EXACTLY like this (no extra text):
+
+1. First safety tip here
+2. Second safety tip here
+3. Third safety tip here
+4. Fourth safety tip here
+
+Keep each tip under 20 words. Be direct and practical.`;
+  
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    console.log('📋 Raw Gemini response:', text);
+    
+    // Parse numbered list into array
+    const lines = text.split('\n').filter(line => line.trim());
+    const tips = [];
+    
+    for (const line of lines) {
+      // Match lines that start with a number and period/dot
+      const match = line.match(/^\d+[\.\)]\s*(.+)/);
+      if (match && match[1]) {
+        tips.push(match[1].trim());
+      }
+    }
+    
+    console.log('✅ Parsed tips:', tips);
+    
+    // If parsing failed, try to extract any useful content
+    if (tips.length === 0) {
+      console.log('⚠️ Parsing failed, using raw text');
+      // Split by newlines and filter empty lines
+      const fallbackTips = text
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 10 && !line.toLowerCase().includes('safety tips'));
+      
+      return {
+        success: true,
+        animalType: animalType,
+        tips: fallbackTips.length > 0 ? fallbackTips : [text]
+      };
+    }
+    
+    return {
+      success: true,
+      animalType: animalType,
+      tips: tips
     };
   } catch (error) {
     console.error('Safety Tip Error:', error);
     return {
       success: false,
-      animalType,
-      tips: fallbackTips[animalType] || ["No tips available."],
-      error: error.message
+      error: error.message,
+      tips: [
+        'Stay calm and maintain a safe distance',
+        'Do not approach or provoke the animal',
+        'Alert others in the area',
+        'Contact campus security immediately'
+      ]
     };
   }
 }
 
-// Existing functions
-async function testGemini() {
-  try {
-    const prompt = "Say 'Hello from BC WildWatch!' in a friendly way.";
-    const text = await safeGenerateContent(prompt);
-    return {
-      success: true,
-      text,
-      model: 'gemini-2.5-pro'
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
-async function chat(message, systemContext = '') {
-  try {
-    const fullPrompt = systemContext 
-      ? `${systemContext}\n\nUser: ${message}\n\nAssistant:`
-      : message;
-
-    const text = await safeGenerateContent(fullPrompt);
-    
-    return {
-      success: true,
-      message: text,
-      tokensUsed: {} // optional
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
+/**
+ * Extract incident information from natural language
+ * @param {string} userMessage - User's description of the incident
+ */
 async function extractIncidentInfo(userMessage) {
   const prompt = `You are analyzing an animal sighting report. Extract the following information from this message:
 
@@ -158,15 +159,30 @@ Rules:
 - Only return the JSON, nothing else`;
 
   try {
-    const text = await safeGenerateContent(prompt);
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // Try to parse JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const extracted = JSON.parse(jsonMatch[0]);
-      return { success: true, data: extracted };
+      return {
+        success: true,
+        data: extracted
+      };
+    } else {
+      return {
+        success: false,
+        error: 'Could not extract structured data'
+      };
     }
-    return { success: false, error: 'Could not extract structured data' };
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('Extract Info Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 

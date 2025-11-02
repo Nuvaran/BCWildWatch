@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Home, ChevronUp, ChevronDown } from 'lucide-react';
+import { Send, Bot, ChevronUp, ChevronDown } from 'lucide-react';
 import MessageList from './MessageList';
 import EmergencyContacts from './EmergencyContacts';
-import Resources from './Resources';
 import ReportStatus from './ReportStatus';
 import apiService from '../services/apiService';
 
@@ -15,7 +14,11 @@ const ChatWindow = ({ userId, userName }) => {
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [currentButtons, setCurrentButtons] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(true);
+  const [uploadedPhoto, setUploadedPhoto] = useState(null);
+  const [awaitingPhotoUpload, setAwaitingPhotoUpload] = useState(false);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -30,48 +33,109 @@ const ChatWindow = ({ userId, userName }) => {
     initializeChat();
   }, []);
 
+  // Check backend health
+  useEffect(() => {
+    checkBackendHealth();
+    const interval = setInterval(checkBackendHealth, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  const checkBackendHealth = async () => {
+    const result = await apiService.checkHealth();
+    setIsOnline(result.success);
+  };
+
   const initializeChat = async () => {
     setIsLoading(true);
     
-    // Send initial message to start conversation
-    const result = await apiService.sendMessage(userId, 'start', 'system');
+    // Don't send any initial message, just show the greeting
+    const greetingMessage = {
+      id: Date.now(),
+      type: 'bot',
+      text: "Hello! 👋 Welcome to BC WildWatch. I can help you report a wildlife or animal incident quickly. Shall we get started?",
+      timestamp: new Date()
+    };
     
-    console.log('Init result:', result);
-    
-    if (result.success && result.data && result.data.response) {
-      const botMessage = {
-        id: Date.now(),
-        type: 'bot',
-        text: result.data.response.text,
-        timestamp: new Date()
-      };
-      
-      setMessages([botMessage]);
-      setCurrentButtons(result.data.response.buttons || []);
-      
-      console.log('✅ Chat initialized successfully');
-      console.log('Buttons:', result.data.response.buttons);
-    } else {
-      console.error('❌ Failed to initialize chat:', result);
-      
-      // Fallback greeting if API fails
-      const fallbackMessage = {
-        id: Date.now(),
-        type: 'bot',
-        text: "Hello! 👋 Welcome to BC WildWatch. I can help you report a wildlife or animal incident quickly. Shall we get started?",
-        timestamp: new Date()
-      };
-      setMessages([fallbackMessage]);
-      setCurrentButtons([
-        { label: "Yes ✅", value: "yes" },
-        { label: "No ❌", value: "no" }
-      ]);
-    }
+    setMessages([greetingMessage]);
+    setCurrentButtons([
+      { label: "Yes ✅", value: "yes" },
+      { label: "No ❌", value: "no" }
+    ]);
     
     setIsLoading(false);
   };
 
+  const resetChat = () => {
+    setMessages([]);
+    setInputMessage('');
+    setReportSubmitted(false);
+    setReportData(null);
+    setCurrentButtons([]);
+    setUploadedPhoto(null);
+    setAwaitingPhotoUpload(false);
+    initializeChat();
+  };
+
+  const handlePhotoUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        alert('Please upload an image file');
+        return;
+      }
+      
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File size must be less than 5MB');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const photoData = {
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          dataUrl: reader.result
+        };
+        setUploadedPhoto(photoData);
+        setAwaitingPhotoUpload(false);
+        
+        // Show photo uploaded message
+        const photoUploadedMessage = {
+          id: Date.now(),
+          type: 'user',
+          text: `📷 ${file.name}`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, photoUploadedMessage]);
+        
+        // Send confirmation to backend and move to next step
+        setTimeout(() => {
+          handleSendMessage('Photo uploaded: ' + file.name, false);
+        }, 500);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const triggerPhotoUpload = () => {
+    fileInputRef.current?.click();
+  };
+
   const handleSendMessage = async (messageText = null, isButtonClick = false) => {
+    if (!isOnline) {
+      const offlineMessage = {
+        id: Date.now(),
+        type: 'bot',
+        text: "I'm currently offline. Please try again later.",
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, offlineMessage]);
+      return;
+    }
+
     const textToSend = messageText || inputMessage;
     
     if (!textToSend.trim()) return;
@@ -108,18 +172,93 @@ const ChatWindow = ({ userId, userName }) => {
       console.log('✅ Got valid response:', {
         text: response.text?.substring(0, 50),
         hasButtons: response.buttons?.length > 0,
-        shouldSubmit: response.shouldSubmitReport
+        shouldSubmit: response.shouldSubmitReport,
+        awaitingPhoto: response.awaitingPhoto
       });
+      
+      // Check if we're waiting for photo upload (don't add bot message)
+      if (response.awaitingPhoto) {
+        console.log('⏳ Awaiting photo upload, not showing bot response');
+        return;
+      }
+      
+      // Check if this is a photo upload confirmation
+      if (textToSend.startsWith('Photo uploaded:')) {
+        // Bot already received the confirmation, now get the actual confirmation step
+        setTimeout(async () => {
+          setIsTyping(true);
+          const confirmResult = await apiService.sendMessage(userId, 'get_confirmation', 'system');
+          setIsTyping(false);
+          
+          if (confirmResult.success && confirmResult.data && confirmResult.data.response) {
+            const confirmResponse = confirmResult.data.response;
+            const confirmMessage = {
+              id: Date.now() + 5,
+              type: 'bot',
+              text: confirmResponse.text,
+              timestamp: new Date()
+            };
+            setMessages(prev => [...prev, confirmMessage]);
+            setCurrentButtons(confirmResponse.buttons || []);
+          }
+        }, 1000);
+        return;
+      }
+      
+      // Check if user said "no" at greeting or after completion
+      if (response.shouldReset) {
+        const botMessage = {
+          id: Date.now() + 1,
+          type: 'bot',
+          text: response.text,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, botMessage]);
+        
+        // Reset conversation after 1.5 seconds
+        setTimeout(() => {
+          resetChat();
+        }, 1500);
+        return;
+      }
+      
+      // Check if user said "no" to reporting another incident
+      if (textToSend.toLowerCase() === 'no' && response.text.includes('Goodbye')) {
+        const botMessage = {
+          id: Date.now() + 1,
+          type: 'bot',
+          text: response.text,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, botMessage]);
+        
+        // Reset conversation after 2 seconds
+        setTimeout(() => {
+          resetChat();
+        }, 2000);
+        return;
+      }
       
       // Check if report should be submitted
       if (response.shouldSubmitReport && response.reportData) {
         console.log('📋 Submitting report to Power Automate...');
-        // Submit to Power Automate
-        const submitResult = await apiService.submitIncident(response.reportData);
+        
+        // Add photo data if available
+        const finalReportData = {
+          ...response.reportData,
+          photo: uploadedPhoto ? {
+            name: uploadedPhoto.name,
+            size: uploadedPhoto.size,
+            type: uploadedPhoto.type,
+            dataUrl: uploadedPhoto.dataUrl
+          } : null
+        };
+        
+        const submitResult = await apiService.submitIncident(finalReportData);
         console.log('Submit result:', submitResult);
         
         setReportSubmitted(true);
-        setReportData(response.reportData);
+        setReportData(finalReportData);
       }
 
       // Add bot response
@@ -168,7 +307,6 @@ const ChatWindow = ({ userId, userName }) => {
         }, 2000);
       }
     } else {
-      // Error handling
       console.error('❌ Failed to get response:', result);
       
       const errorMessage = {
@@ -182,6 +320,37 @@ const ChatWindow = ({ userId, userName }) => {
   };
 
   const handleButtonClick = (buttonValue) => {
+    // Handle photo upload button specially
+    if (buttonValue === 'upload') {
+      // Add a message showing user clicked upload
+      const uploadClickMessage = {
+        id: Date.now(),
+        type: 'user',
+        text: '📷 Upload Photo',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, uploadClickMessage]);
+      setCurrentButtons([]);
+      
+      // Show waiting message
+      setIsTyping(true);
+      setTimeout(() => {
+        setIsTyping(false);
+        const waitingMessage = {
+          id: Date.now() + 1,
+          type: 'bot',
+          text: 'Please select a photo from your device...',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, waitingMessage]);
+        
+        // Trigger file picker
+        setAwaitingPhotoUpload(true);
+        triggerPhotoUpload();
+      }, 500);
+      return;
+    }
+    
     handleSendMessage(buttonValue, true);
   };
 
@@ -210,23 +379,22 @@ const ChatWindow = ({ userId, userName }) => {
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-primary-500 rounded-lg flex items-center justify-center">
-              <Home className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
+              <Bot className="w-6 h-6 text-primary-600" />
             </div>
             <div>
               <h1 className="font-bold text-lg text-gray-800">BCWildWatch</h1>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-500">BCWildWatch Chat</span>
                 <div className="flex items-center space-x-1.5">
-                  <div className="w-2 h-2 bg-accent-teal rounded-full animate-pulse"></div>
-                  <span className="text-sm text-accent-teal font-medium">Online</span>
+                  <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></div>
+                  <span className={`text-sm font-medium ${isOnline ? 'text-green-600' : 'text-gray-500'}`}>
+                    {isOnline ? 'Online' : 'Offline'}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
-          <button className="text-primary-500 text-sm font-medium hover:text-primary-600 transition-colors">
-            Sign Out
-          </button>
         </div>
 
         {/* Messages Container */}
@@ -240,21 +408,33 @@ const ChatWindow = ({ userId, userName }) => {
           
           {/* Quick Action Buttons */}
           {currentButtons.length > 0 && !isTyping && (
-            <div className="flex flex-wrap gap-2 max-w-2xl mx-auto">
-              {currentButtons.map((button, index) => (
-                <button
-                  key={index}
-                  onClick={() => handleButtonClick(button.value)}
-                  className="px-4 py-2 bg-white hover:bg-primary-50 border-2 border-primary-200 hover:border-primary-500 text-primary-700 hover:text-primary-800 rounded-full font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md"
-                >
-                  {button.label}
-                </button>
-              ))}
+            <div className="max-w-4xl mx-auto w-full">
+              <div className="flex flex-wrap gap-2 ml-0 md:ml-12">
+                {currentButtons.map((button, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleButtonClick(button.value)}
+                    disabled={!isOnline}
+                    className="px-4 py-2 bg-white hover:bg-primary-50 border-2 border-primary-500 hover:border-primary-600 text-primary-700 hover:text-primary-800 rounded-full font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {button.label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Hidden File Input for Photo Upload */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handlePhotoUpload}
+          className="hidden"
+        />
 
         {/* Input Area */}
         <div 
@@ -264,24 +444,21 @@ const ChatWindow = ({ userId, userName }) => {
           }}
         >
           <div className="flex items-center space-x-3 max-w-4xl mx-auto">
-            <button className="w-11 h-11 flex items-center justify-center text-primary-500 hover:bg-primary-50 rounded-full transition-colors flex-shrink-0">
-              <Home className="w-5 h-5" />
-            </button>
             <div className="flex-1 bg-gray-100 rounded-full px-5 py-3 flex items-center">
               <input
                 type="text"
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Type your message..."
-                disabled={isTyping}
+                placeholder={isOnline ? "Type your message..." : "Bot is offline..."}
+                disabled={isTyping || !isOnline}
                 className="flex-1 bg-transparent outline-none text-sm text-gray-800 placeholder-gray-400 disabled:opacity-50"
               />
             </div>
             <button
               onClick={() => handleSendMessage()}
-              disabled={!inputMessage.trim() || isTyping}
-              className="w-11 h-11 bg-primary-500 rounded-full flex items-center justify-center hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              disabled={!inputMessage.trim() || isTyping || !isOnline}
+              className="w-11 h-11 bg-primary-400 rounded-full flex items-center justify-center hover:bg-primary-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               <Send className="w-5 h-5 text-white" />
             </button>
@@ -299,8 +476,7 @@ const ChatWindow = ({ userId, userName }) => {
               location={reportData.location?.landmark || `${reportData.location?.longitude}, ${reportData.location?.latitude}`}
               status="Alert Sent"
             />
-            <EmergencyContacts />
-            <Resources />
+            <EmergencyContacts showOnlyEmergencyServices={true} />
           </div>
         </div>
       )}
@@ -319,7 +495,7 @@ const ChatWindow = ({ userId, userName }) => {
           >
             <div className="flex items-center space-x-3">
               <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
-                <Home className="w-4 h-4 text-primary-600" />
+                <Bot className="w-4 h-4 text-primary-600" />
               </div>
               <div className="text-left">
                 <div className="font-semibold text-gray-800 text-sm">Report Details</div>
@@ -346,8 +522,7 @@ const ChatWindow = ({ userId, userName }) => {
                 location={reportData.location?.landmark || `${reportData.location?.longitude}, ${reportData.location?.latitude}`}
                 status="Alert Sent"
               />
-              <EmergencyContacts />
-              <Resources />
+              <EmergencyContacts showOnlyEmergencyServices={true} />
             </div>
           )}
         </div>

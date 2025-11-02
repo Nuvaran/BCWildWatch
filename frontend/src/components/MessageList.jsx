@@ -1,4 +1,4 @@
-import { Home, User, AlertTriangle } from 'lucide-react';
+import { Bot, User, AlertTriangle } from 'lucide-react';
 
 const MessageList = ({ messages, isTyping }) => {
   return (
@@ -12,7 +12,7 @@ const MessageList = ({ messages, isTyping }) => {
             {/* Avatar */}
             {message.type === 'bot' ? (
               <div className="w-9 h-9 bg-primary-100 rounded-full flex items-center justify-center flex-shrink-0 mb-1">
-                <Home className="w-5 h-5 text-primary-600" />
+                <Bot className="w-5 h-5 text-primary-600" />
               </div>
             ) : (
               <div className="w-9 h-9 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0 mb-1">
@@ -77,7 +77,7 @@ const MessageList = ({ messages, isTyping }) => {
         <div className="flex justify-start mb-6 message-enter max-w-4xl mx-auto w-full">
           <div className="flex items-end space-x-3">
             <div className="w-9 h-9 bg-primary-100 rounded-full flex items-center justify-center flex-shrink-0 mb-1">
-              <Home className="w-5 h-5 text-primary-600" />
+              <Bot className="w-5 h-5 text-primary-600" />
             </div>
             <div className="flex flex-col">
               <span className="text-xs text-gray-500 mb-1.5 px-1">BCWildWatch Bot</span>

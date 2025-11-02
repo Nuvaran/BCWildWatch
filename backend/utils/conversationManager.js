@@ -65,6 +65,12 @@ class ConversationManager {
       conversation.data = { ...conversation.data, ...updates.data };
     }
     
+    // Store the step to return to after editing
+    if (updates.editingField) {
+      conversation.returnToStep = STEPS.CONFIRM;
+      conversation.editingField = updates.editingField;
+    }
+    
     conversation.timestamp = new Date();
     this.conversations.set(userId, conversation);
     
@@ -108,17 +114,59 @@ class ConversationManager {
     ) || null;
   }
 
-  // Validate location coordinates
-  validateLocation(longitude, latitude) {
-    const lon = parseFloat(longitude);
-    const lat = parseFloat(latitude);
+  // Validate location coordinates (supports multiple formats)
+  validateLocation(input) {
+    // Format 1: Decimal degrees with comma: -33.9394, 18.8480
+    const decimalMatch = input.match(/(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)/);
+    
+    // Format 2: DMS (Degrees Minutes Seconds): 33°56'21.7"S 18°50'52.8"E
+    const dmsMatch = input.match(/(\d+)°(\d+)'([\d.]+)"([NS])\s+(\d+)°(\d+)'([\d.]+)"([EW])/);
+    
+    if (dmsMatch) {
+      // Convert DMS to decimal degrees
+      const latDeg = parseInt(dmsMatch[1]);
+      const latMin = parseInt(dmsMatch[2]);
+      const latSec = parseFloat(dmsMatch[3]);
+      const latDir = dmsMatch[4];
+      
+      const lonDeg = parseInt(dmsMatch[5]);
+      const lonMin = parseInt(dmsMatch[6]);
+      const lonSec = parseFloat(dmsMatch[7]);
+      const lonDir = dmsMatch[8];
+      
+      let lat = latDeg + (latMin / 60) + (latSec / 3600);
+      let lon = lonDeg + (lonMin / 60) + (lonSec / 3600);
+      
+      if (latDir === 'S') lat = -lat;
+      if (lonDir === 'W') lon = -lon;
+      
+      return {
+        valid: true,
+        latitude: lat,
+        longitude: lon,
+        originalFormat: input
+      };
+    }
+    
+    if (decimalMatch) {
+      const lat = parseFloat(decimalMatch[1]);
+      const lon = parseFloat(decimalMatch[2]);
+      
+      return {
+        valid: !isNaN(lon) && !isNaN(lat) && 
+               lon >= -180 && lon <= 180 && 
+               lat >= -90 && lat <= 90,
+        latitude: lat,
+        longitude: lon,
+        originalFormat: input
+      };
+    }
     
     return {
-      valid: !isNaN(lon) && !isNaN(lat) && 
-             lon >= -180 && lon <= 180 && 
-             lat >= -90 && lat <= 90,
-      longitude: lon,
-      latitude: lat
+      valid: false,
+      latitude: null,
+      longitude: null,
+      originalFormat: input
     };
   }
 
@@ -164,7 +212,10 @@ class ConversationManager {
 
       case STEPS.LOCATION:
         return {
-          text: "Please provide the location of the incident. You can share coordinates (longitude, latitude) or describe the nearest landmark.\n\nExample: '28.0473,-26.2041' or 'Near the library entrance'",
+          text: "Please provide the location of the incident. You can use one of these formats:\n\n" +
+                "• GPS Coordinates: 33°56'21.7\"S 18°50'52.8\"E\n" +
+                "• Or: -33.9394, 18.8480\n" +
+                "• Or describe: 'Near the library entrance'",
           buttons: [],
           expectsInput: 'text'
         };
@@ -187,17 +238,22 @@ class ConversationManager {
         };
 
       case STEPS.CONFIRM:
-        const locationText = data.location.longitude 
+        const locationText = data.location?.longitude 
           ? `${data.location.longitude}, ${data.location.latitude}`
-          : data.location.landmark;
+          : (data.location?.landmark || 'Not specified');
+        
+        const photoStatus = data.photoFilename ? `Uploaded: ${data.photoFilename} ✅` : 'None';
+        
+        console.log('📋 Generating confirmation with photo status:', photoStatus);
+        console.log('📋 Full data:', data);
         
         return {
           text: `Thanks for providing the details! Here's a summary of your report:\n\n` +
-                `• Animal: ${data.animalType}\n` +
-                `• Campus: ${data.campus}\n` +
+                `• Animal: ${data.animalType || 'Not specified'}\n` +
+                `• Campus: ${data.campus || 'Not specified'}\n` +
                 `• Location: ${locationText}\n` +
-                `• Details: ${data.details}\n` +
-                `• Photo: ${data.photoUrl ? 'Uploaded ✅' : 'None'}\n\n` +
+                `• Details: ${data.details || 'Not specified'}\n` +
+                `• Photo: ${photoStatus}\n\n` +
                 `Do you want to submit this report?`,
           buttons: [
             { label: "Submit ✅", value: "submit" },
